@@ -54,6 +54,12 @@ test('loopback setup verifies origin and ticket, preserves runtime settings and 
       } });
     assert.equal((await request('/install', payload, 'https://external.example')).status, 403);
     assert.equal((await request('/install', payload, origin, 'wrong')).status, 403);
+    for (const [site, expected] of [['same-origin', 200], ['cross-site', 403]] as const) {
+      const response = await fetch(origin + '/status', {method:'POST',body:'{}',headers:{
+        'content-type':'application/json','sec-fetch-site':site,'x-cbgpu-setup':hash.slice(1),
+      }});
+      assert.equal(response.status, expected);
+    }
     assert.equal((await request('/install', { ...payload, accepted: false })).status, 400);
     assert.equal((await request('/install', { ...payload, model:'cbgpu-chat' })).status, 400);
     const remoteOptions = { ...payload, context:65536, output:4096, vision:true, telegram:true, autoStart:true,

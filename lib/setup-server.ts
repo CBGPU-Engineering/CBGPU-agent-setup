@@ -296,7 +296,7 @@ export function startSetup({
   };
   const server = createServer(async (request, response) => {
     response.setHeader('cache-control', 'no-store');
-    response.setHeader('referrer-policy', 'no-referrer');
+    response.setHeader('referrer-policy', 'same-origin');
     response.setHeader('x-content-type-options', 'nosniff');
     response.setHeader('content-security-policy', "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     const pathname = request.url ?? '/';
@@ -316,7 +316,9 @@ export function startSetup({
       return;
     }
     const token = request.headers['x-cbgpu-setup'];
-    if (request.method !== 'POST' || request.headers.origin !== origin || typeof token !== 'string' ||
+    const sameOrigin = request.headers.origin === origin ||
+      (request.headers.origin === undefined && request.headers['sec-fetch-site'] === 'same-origin');
+    if (request.method !== 'POST' || !sameOrigin || typeof token !== 'string' ||
         Buffer.byteLength(token) !== Buffer.byteLength(ticket) || !timingSafeEqual(Buffer.from(token), Buffer.from(ticket))) {
       return reply(response, 403, { error: '이 설치 창을 다시 열어 주세요.' });
     }
