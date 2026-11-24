@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { portableSetupVersion } from './config.ts';
 import { saveSetupFile } from './setup-autostart.ts';
 import { openBrowser } from './setup-runtime.ts';
 import { startSetup, systemRoot } from './setup-server.ts';
@@ -14,9 +15,9 @@ function setupPort(root: string) {
 
 export async function runSetupProcess({ background = false, root = systemRoot, start = startSetup, portable = false,
   manual = undefined as Agent | undefined } = {}) {
-  const port = setupPort(root);
+  const port = setupPort(portable ? root + ':portable:' + portableSetupVersion : root);
   const origin = 'http://127.0.0.1:' + port;
-  const record = path.join(root, 'setup-session.json');
+  const record = path.join(root, portable ? 'setup-session-' + portableSetupVersion + '.json' : 'setup-session.json');
   await mkdir(root, { recursive: true, mode: 0o700 });
   let service;
   try {

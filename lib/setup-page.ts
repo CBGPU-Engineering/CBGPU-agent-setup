@@ -19,8 +19,9 @@ export const page = '<!doctype html>' + String.raw`
 <section><h2>Telegram 연결 <span class="optional">선택</span></h2>
 <p>Telegram에서 내 에이전트에 작업을 맡기려면 봇을 연결하세요.</p>
 <ol><li><a href="https://t.me/BotFather" target="_blank" rel="noreferrer">BotFather</a>에서 <code>/newbot</code>으로 봇을 만들어요.</li><li><a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">UserInfoBot</a>에서 내 숫자 사용자 ID를 확인해요.</li></ol>
-<div class="fields"><div><label for="telegram">봇 토큰</label><input id="telegram" type="password" autocomplete="off" spellcheck="false"></div>
+<div class="fields"><div><label for="telegram">봇 토큰</label><input id="telegram" type="password" autocomplete="off" placeholder="숫자:문자열" spellcheck="false" aria-describedby="telegram-result"></div>
 <div><label for="user">내 사용자 ID</label><input id="user" inputmode="numeric" pattern="[1-9][0-9]{0,15}"></div></div>
+<div class="inline"><button id="verify-telegram" type="button">봇 연결 확인</button><p class="help" id="telegram-result" role="status"></p></div>
 <label class="agree"><input id="autostart" type="checkbox"> <span>컴퓨터에 로그인하면 자동 시작</span></label>
 <p class="help">이 컴퓨터에 로그인하면 에이전트가 켜져요. 컴퓨터가 켜져 있고 인터넷에 연결되어 있어야 Telegram으로 작업을 맡길 수 있어요.</p>
 <button id="save-autostart" type="button" hidden>자동 시작 설정 저장</button>
@@ -89,6 +90,7 @@ history.replaceState(null, '', location.pathname);
 const get = id => document.getElementById(id);
 const form = get('setup'), select = get('model'), key = get('key');
 const status = get('status'), verify = get('verify'), apply = get('apply');
+const telegram = get('telegram'), verifyTelegram = get('verify-telegram'), telegramResult = get('telegram-result');
 const capabilityNames = ['read','write','shell','browser','screen','schedule','send','outside','accounts','skills'];
 let needsSudo = false, platform = '', catalog = [], busy = false, running = false, saved = '', portable = false;
 const selected = () => new FormData(form).get('agent');
@@ -142,6 +144,18 @@ get('assistant').addEventListener('click', () => {
   renderModels();
 });
 key.addEventListener('input', () => { catalog = []; renderModels(); });
+telegram.addEventListener('input', () => { telegramResult.textContent = ''; });
+verifyTelegram.addEventListener('click', async () => {
+  const token = telegram.value.trim();
+  verifyTelegram.disabled = true;
+  telegramResult.textContent = 'Telegram에서 봇을 확인하고 있어요.';
+  try {
+    const { username } = await request('/telegram/check', { token });
+    if (token === telegram.value.trim()) telegramResult.textContent = username ? '@' + username + ' 봇을 확인했어요.' : 'Telegram 봇을 확인했어요.';
+  } catch (error) {
+    if (token === telegram.value.trim()) telegramResult.textContent = error.message;
+  } finally { verifyTelegram.disabled = false; }
+});
 verify.addEventListener('click', async () => {
   if (!key.reportValidity()) return;
   verify.disabled = true;
@@ -163,7 +177,7 @@ form.addEventListener('submit', async event => {
     const result = await request('/install', data);
     saved = data.agent; needsSudo = data.permissions.sudo;
     get('save-autostart').hidden = !data.token;
-    key.value = ''; get('telegram').value = ''; catalog = [];
+    key.value = ''; telegram.value = ''; telegramResult.textContent = ''; catalog = [];
     get('start').hidden = portable;
     if (portable) {
       get('manual-guide').textContent = platform === 'darwin'

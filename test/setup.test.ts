@@ -108,6 +108,45 @@ test('startup entries run under the desktop user and quote the application paths
   assert.match(windows.content, /start "" \/min "C:\/Program Files\/nodejs\/node\.exe" "C:\/Users\/user\/%%profile%%\/setup-process\.js" --autostart/);
 });
 
+test('Telegram verification reports the real cause and retries transient failures', async () => {
+  let calls = 0;
+  let response: (count: number) => Response = () => Response.json({ ok: true, result: { is_bot: true, username: 'cbgpu_test_bot' } });
+  const { url, server } = await startSetup({ browser: false, async fetchBot(input, options) {
+    assert.equal(input, 'https://api.telegram.org/bot' + token + '/getMe');
+    assert.equal(options.redirect, 'manual');
+    return response(++calls);
+  } });
+  try {
+    const { origin, hash } = new URL(url);
+    async function check(value = token) {
+      const result = await fetch(origin + '/telegram/check', { method: 'POST', body: JSON.stringify({ token: value }), headers: {
+        'content-type': 'application/json', origin, 'x-cbgpu-setup': hash.slice(1),
+      } });
+      const body = await result.json();
+      assert.doesNotMatch(JSON.stringify(body), new RegExp(token));
+      return { ok: result.ok, body };
+    }
+    assert.match((await check('bot'+token)).body.error, /콜론/);
+    assert.equal(calls, 0);
+    assert.deepEqual(await check(), { ok: true, body: { username: 'cbgpu_test_bot' } });
+
+    response = () => Response.json({ ok: false, error_code: 401 }, { status: 401 });
+    assert.match((await check()).body.error, /토큰을 거부.*401/);
+    response = () => new Response('<html>Blocked</html>', { status: 403 });
+    assert.match((await check()).body.error, /네트워크.*403/);
+    response = () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 3 } }, { status: 429 });
+    assert.match((await check()).body.error, /3초 뒤/);
+
+    calls = 0;
+    response = count => count === 1 ? new Response('Unavailable', { status: 503 })
+      : Response.json({ ok: true, result: { is_bot: true } });
+    assert.deepEqual(await check(), { ok: true, body: { username: null } });
+    assert.equal(calls, 2);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test('only a configured Telegram profile may resume at login and does so once', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cbgpu-autostart-test-'));
   const enrolled: boolean[] = [];

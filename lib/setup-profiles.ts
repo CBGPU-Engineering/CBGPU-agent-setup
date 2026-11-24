@@ -34,10 +34,13 @@ export function modelsFromCatalog(raw: unknown): Model[] {
   return models.sort((a, b) => Number(b.id === preferredModel) - Number(a.id === preferredModel));
 }
 
+export const validTelegramToken = (token: unknown): token is string =>
+  typeof token === 'string' && /^[0-9]{5,20}:[A-Za-z0-9_-]{25,100}$/.test(token);
+
 export function parseTelegram(token: unknown, userId: unknown): Telegram | null {
   if (!token && !userId) return null;
-  if (typeof token !== 'string' || !/^[0-9]{5,20}:[A-Za-z0-9_-]{25,100}$/.test(token) ||
-      typeof userId !== 'string' || !/^[1-9][0-9]{0,15}$/.test(userId)) {
+  if (!validTelegramToken(token)) throw new Error('BotFather에서 받은 봇 토큰을 콜론 앞뒤 전체 복사해 주세요.');
+  if (typeof userId !== 'string' || !/^[1-9][0-9]{0,15}$/.test(userId)) {
     throw new Error('Telegram 봇 토큰과 내 숫자 사용자 ID를 모두 입력해 주세요.');
   }
   return { token, userId };
