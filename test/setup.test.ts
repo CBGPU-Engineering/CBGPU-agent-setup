@@ -267,7 +267,7 @@ test('existing Hermes users can refresh their launcher without reinstalling or r
     assert.equal(await readFile(path.join(folder, 'config.yaml'), 'utf8'), config);
     assert.equal(await readFile(path.join(folder, 'credentials.json'), 'utf8'), credentials);
     assert.equal(await readFile(path.join(root, 'autostart.json'), 'utf8'), autoStart);
-    const bundled = await import('../dist/lib/setup-config.js');
+    const bundled = await import(new URL('../dist/lib/setup-config.js', import.meta.url).href) as typeof import('../lib/setup-config.ts');
     assert.equal(await bundled.readHermesModel(path.join(folder, 'config.yaml')), 'cbgpu-qwen38');
     await writeFile(path.join(folder, 'config.yaml'), 'model: [key-that-should-not-be-reported');
     const response = await request('/update-hermes-launcher');
