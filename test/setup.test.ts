@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { makeProfile, modelsFromCatalog, parseTelegram } from '../lib/setup-profiles.ts';
 import { startSetup } from '../lib/setup-server.ts';
+import { readHermesModel } from '../lib/setup-config.ts';
 import { startupEntry } from '../lib/setup-autostart.ts';
 
 const key = 'cbgpu_ai_fixture_token_1234567';
@@ -194,6 +195,11 @@ test('only a configured Telegram profile may resume at login and does so once', 
     assert.equal((await request('/install', { ...payload, token, user:'111' })).status, 200);
     assert.equal((await request('/install', { ...payload, agent:'hermes', token, user:'111' })).status, 400);
     assert.equal((await request('/install', { ...payload, agent:'hermes', token:token.replace('123456789', '987654321'), user:'111' })).status, 200);
+    const hermes = path.join(root, 'hermes', 'config.yaml');
+    const originalHermes = await readFile(hermes, 'utf8');
+    assert.equal(await readHermesModel(hermes), 'cbgpu-qwen38');
+    const rewrittenHermes = "# Saved by Hermes after a conversation\nmodel:\n  default: cbgpu-qwen38\n  provider: custom\nagent:\n  max_turns: 12\n";
+    await writeFile(hermes, rewrittenHermes);
     assert.deepEqual(enrolled, [true, true]);
     assert.match(await readFile(path.join(root, 'openclaw', 'workspace', 'AGENTS.md'), 'utf8'), /openclaw skills search, verify, and install/);
     assert.deepEqual(await resumeSaved(), {active:true,pending:false});
@@ -213,6 +219,61 @@ test('only a configured Telegram profile may resume at login and does so once', 
     assert.equal((await request('/stop', {agent:'openclaw'})).status, 200);
     assert.equal((await request('/stop', {agent:'hermes'})).status, 200);
     assert.deepEqual(await resumeSaved(), {active:false,pending:false});
+    assert.equal((await request('/start', {agent:'hermes'})).status, 200);
+    assert.equal(await readFile(hermes, 'utf8'), rewrittenHermes);
+    assert.notEqual(originalHermes, rewrittenHermes);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('existing Hermes users can refresh their launcher without reinstalling or rewriting their profile', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'cbgpu-hermes-update-'));
+  const updates: string[] = [];
+  const folder = path.join(root, 'hermes');
+  const credentials = JSON.stringify({ key, telegram: { token, userId: '111' }, permissions: { read: true } });
+  const config = 'model:\n  default: "cbgpu-qwen38"\n  provider: custom\n# User changes\n';
+  const autoStart = '{"hermes":true,"openclaw":false}';
+  await mkdir(folder);
+  await writeFile(path.join(folder, 'config.yaml'), config);
+  await writeFile(path.join(folder, 'credentials.json'), credentials);
+  await writeFile(path.join(root, 'autostart.json'), autoStart);
+  const { url, server } = await startSetup({
+    root, browser: false, portable: true,
+    async install() { assert.fail('Updating must not reinstall Hermes'); },
+    async getModels() { assert.fail('Updating must not require a model request'); },
+    async shortcut(dir, agent) {
+      assert.equal(dir, root);
+      assert.equal(agent, 'hermes');
+      updates.push('launcher');
+      return { name: 'Hermes (CBGPU)', file: 'fixture' };
+    },
+    async enroll(dir, enabled) {
+      assert.equal(dir, root);
+      assert.equal(enabled, true);
+      updates.push('autostart');
+    },
+  });
+  try {
+    const { origin, hash } = new URL(url);
+    const request = (route: string, ticket = hash.slice(1)) => fetch(origin + route, {
+      method: 'POST', body: '{}', headers: { 'content-type': 'application/json', origin, 'x-cbgpu-setup': ticket },
+    });
+    assert.equal((await (await request('/status')).json()).hermesConfigured, true);
+    assert.equal((await request('/update-hermes-launcher', 'invalid')).status, 403);
+    assert.equal((await request('/update-hermes-launcher')).status, 200);
+    assert.deepEqual(updates, ['launcher', 'autostart']);
+    assert.equal(await readFile(path.join(folder, 'config.yaml'), 'utf8'), config);
+    assert.equal(await readFile(path.join(folder, 'credentials.json'), 'utf8'), credentials);
+    assert.equal(await readFile(path.join(root, 'autostart.json'), 'utf8'), autoStart);
+    const bundled = await import(new URL('../dist/lib/setup-config.js', import.meta.url).href) as typeof import('../lib/setup-config.ts');
+    assert.equal(await bundled.readHermesModel(path.join(folder, 'config.yaml')), 'cbgpu-qwen38');
+    await writeFile(path.join(folder, 'config.yaml'), 'model: [key-that-should-not-be-reported');
+    const response = await request('/update-hermes-launcher');
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /^Hermes 설정 파일을 읽지 못했어요/);
+    assert.deepEqual(updates, ['launcher', 'autostart']);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });

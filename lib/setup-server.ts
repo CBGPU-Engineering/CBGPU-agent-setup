@@ -14,6 +14,7 @@ import { findRuntime, installRuntime, prepareDesktop, openBrowser, runtimeEnviro
 import { configureAutostart, configureManualLauncher, saveSetupFile } from './setup-autostart.ts';
 import { readSetupLogo, setupLogos } from './setup-assets.ts';
 import { inhibitSleep } from './setup-power.ts';
+import { readHermesModel } from './setup-config.ts';
 
 export const systemRoot = path.join(os.homedir(), '.config', 'cbgpu-agent', 'setup');
 const parseAgent = (value: unknown): Agent => {
@@ -214,8 +215,8 @@ export function startSetup({
     const { key, telegram, permissions } = await read(folder, 'credentials.json');
     if (!validKey(key)) throw new Error('CBGPU에 다시 연결해 주세요.');
     const configFile = agent === 'openclaw' ? 'openclaw.json' : 'config.yaml';
-    const config = await read(folder, configFile);
-    const context = agent === 'openclaw' ? config.models.providers.cbgpu.models[0].id : config.model.default;
+    const config = agent === 'openclaw' ? await read(folder, configFile) : null;
+    const context = config ? config.models.providers.cbgpu.models[0].id : await readHermesModel(path.join(folder, configFile));
     if (sudoPassword !== undefined && sudoPassword !== '' && (agent !== 'hermes' || !permissions?.sudo ||
         typeof sudoPassword !== 'string' || sudoPassword.length > 256 || sudoPassword.includes('\0'))) {
       throw new Error('이 프로필에서는 sudo 비밀번호를 사용할 수 없어요.');
@@ -257,6 +258,20 @@ export function startSetup({
         ? 'http://127.0.0.1:19349/#token=' + encodeURIComponent(config.gateway.auth.token)
         : null,
     };
+  }
+  async function updateHermesLauncher() {
+    if (!portable || busy) throw new Error('설치가 끝난 뒤 바로가기를 업데이트해 주세요.');
+    busy = true;
+    try {
+      const folder = path.join(root, 'hermes');
+      const current = await read(folder, 'credentials.json').catch(() => null);
+      if (!validKey(current?.key)) throw new Error('이 컴퓨터에서 CBGPU에 연결한 Hermes를 찾지 못했어요.');
+      await readHermesModel(path.join(folder, 'config.yaml'));
+      const launcher = await shortcut(root, 'hermes');
+      if ((await loginOptions()).hermes) await enroll(root, true);
+      runtimeReady = true;
+      return { launcher };
+    } finally { busy = false; }
   }
   async function startManually(agent: Agent, sudoPassword?: unknown) {
     if (portable) throw new Error('설치 도우미를 닫고 OpenClaw 또는 Hermes 바로가기에서 시작해 주세요.');
@@ -332,16 +347,19 @@ export function startSetup({
           const current = saved === 'openclaw' || saved === 'hermes' ? await read(path.join(root, saved), 'credentials.json').catch(() => null) : null;
           const permissions = parsePermissions(current?.permissions);
           const flags = await loginOptions();
+          const hermesConfigured = portable && validKey((saved === 'hermes' ? current
+            : await read(path.join(root, 'hermes'), 'credentials.json').catch(() => null))?.key);
           result = { saved: current ? saved : '', permissions, platform: process.platform,
             running: typeof saved === 'string' && running.has(saved as Agent),
             autoStart: Boolean(current?.telegram && flags[saved as Agent]),
-            telegram: Boolean(current?.telegram), portable };
+            telegram: Boolean(current?.telegram), portable, hermesConfigured };
           break;
         }
         case '/models': result = { models: await getModels(payload.key) }; break;
         case '/telegram/check': result = await verifyTelegramBot(payload.token, fetchBot); break;
         case '/server-prompt': result = { prompt: serverSetupPrompt(parseAgent(payload.agent), payload) }; break;
         case '/install': result = await configure(payload); break;
+        case '/update-hermes-launcher': result = await updateHermesLauncher(); break;
         case '/install-runtime': {
           if (!portable || busy || running.has(parseAgent(payload.agent))) throw new Error('설치가 진행 중인지 확인해 주세요.');
           if (payload.accepted !== true) throw new Error('설치 전에 접근 권한과 위험을 확인해 주세요.');

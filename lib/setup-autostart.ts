@@ -9,7 +9,7 @@ import type { Agent } from './setup-profiles.ts';
 
 export const runtimeModules = [
   'config.js', 'setup-assets.js', 'setup-autostart.js', 'setup-node.js', 'setup-page.js', 'setup-process.js',
-  'setup-power.js', 'setup-profiles.js', 'setup-runtime.js', 'setup-server.js',
+  'setup-power.js', 'setup-profiles.js', 'setup-runtime.js', 'setup-server.js', 'setup-config.js',
 ];
 
 export async function saveSetupFile(folder: string, file: string, value: string | Uint8Array) {
