@@ -56,6 +56,19 @@ test('loopback setup verifies origin and ticket, preserves runtime settings and 
     assert.equal((await request('/install', payload, origin, 'wrong')).status, 403);
     assert.equal((await request('/install', { ...payload, accepted: false })).status, 400);
     assert.equal((await request('/install', { ...payload, model:'cbgpu-chat' })).status, 400);
+    const remoteOptions = { ...payload, context:65536, output:4096, vision:true, telegram:true, autoStart:true,
+      permissions:{read:true,shell:true,outside:false}, sudoPassword:'fixture-never-copy-this' };
+    for (const agent of ['openclaw', 'hermes']) {
+      const result = await request('/server-prompt', { ...remoteOptions, agent });
+      assert.equal(result.status, 200);
+      const { prompt } = await result.json();
+      assert.match(prompt, agent === 'openclaw' ? /cbgpu\/cbgpu-qwen38/ : /model\.default를 cbgpu-qwen38/);
+      assert.match(prompt, /65536.*4096/);
+      assert.match(prompt, /TELEGRAM_BOT_TOKEN.*111/);
+      assert.match(prompt, /허용할 권한은 read, shell/);
+      assert.match(prompt, /자동 실행을 설정/);
+      assert.doesNotMatch(prompt, /fixture-never-copy-this|abcdefghijklmnopqrstuvwxyz|cbgpu_ai_/);
+    }
     assert.equal(installed.length, 0);
     assert.equal((await request('/install', payload)).status, 200);
     assert.deepEqual(installed, ['openclaw']);

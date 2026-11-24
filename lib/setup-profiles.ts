@@ -46,6 +46,42 @@ export function parseTelegram(token: unknown, userId: unknown): Telegram | null 
   return { token, userId };
 }
 
+export function serverSetupPrompt(agent: Agent, input: Record<string, unknown>) {
+  const modelId = input.model;
+  const context = input.context;
+  const output = input.output;
+  if (typeof modelId !== 'string' || !/^cbgpu-[a-z0-9-]{1,60}$/.test(modelId) ||
+      typeof context !== 'number' || !Number.isSafeInteger(context) || context < minimumContext[agent] || context > 1048576 ||
+      typeof output !== 'number' || !Number.isSafeInteger(output) || output < 1 || output >= context) {
+    throw new Error('CBGPU 모델을 먼저 확인하고 선택해 주세요.');
+  }
+  const telegram = input.telegram === true;
+  const userId = input.user;
+  if (telegram && (typeof userId !== 'string' || !/^[1-9][0-9]{0,15}$/.test(userId))) {
+    throw new Error('Telegram에서 봇에게 말할 내 숫자 사용자 ID를 입력해 주세요.');
+  }
+  const openClaw = agent === 'openclaw';
+  const name = openClaw ? 'OpenClaw' : 'Hermes Agent';
+  const permissions = parsePermissions(input.permissions);
+  const enabled = capabilityNames.filter(key => permissions[key]);
+  return [
+    `현재 접속한 Linux 서버에 ${name}를 설치하고 CBGPU에 연결해 주세요. 이미 설치된 런타임과 프로필은 재사용하고 기존 설정과 작업 파일을 보존하세요.`,
+    openClaw ? '공식 설치 및 설정 문서는 https://docs.openclaw.ai/install 과 https://docs.openclaw.ai/gateway/config-tools/custom-providers 를 사용하세요.'
+      : '공식 설치는 https://github.com/NousResearch/hermes-agent 를, 설정은 https://hermes-agent.nousresearch.com/docs/integrations/providers 와 https://hermes-agent.nousresearch.com/docs/user-guide/messaging 를 사용하세요.',
+    `OpenAI 호환 API는 ${endpoint} 입니다. 모델 ID는 ${modelId}, 대화 길이는 ${context}토큰, 최대 출력은 ${output}토큰, 이미지 입력은 ${input.vision === true ? '지원' : '미지원'}입니다.`,
+    openClaw ? `공급자 이름을 cbgpu, API 형식을 openai-completions, 기본 모델을 cbgpu/${modelId}로 설정하세요.`
+      : `model.provider를 custom, model.base_url을 위 API 주소, model.default를 ${modelId}, model.key_env를 CBGPU_API_KEY로 맞추세요.`,
+    'API 키는 서버에서 CBGPU_API_KEY라는 비밀 환경변수로 읽으세요. 값이 비어 있으면 시스템의 비밀 설정에 직접 입력할 위치를 알려주세요. 키를 채팅, 명령 인자, 소스 또는 로그에 남기지 마세요.',
+    telegram
+      ? `Telegram 봇 토큰은 서버의 비밀 설정 TELEGRAM_BOT_TOKEN에서 읽으세요. ${userId} 계정의 개인 메시지만 받고 그룹을 비활성화하세요. 설치 검증에는 봇 정보 확인(getMe)만 사용하세요.`
+      : '신규 설정에서 Telegram을 사용하지 않아요. 기존에 설정된 채널은 보존하세요.',
+    `허용할 권한은 ${enabled.length ? enabled.join(', ') : '없음'}입니다. 선택하지 않은 도구 권한은 부여하지 마세요. Linux 서버에 화면 세션이나 키체인이 없으면 관련 권한의 설정이 필요한지 알려주세요. sudo는 OS의 승인 절차를 따르고 암호를 저장하지 마세요.`,
+    input.autoStart === true ? '서버가 다시 켜질 때도 시작하도록 자동 실행을 설정하세요. systemd 서버는 서비스, 컨테이너는 재시작 정책과 영구 볼륨을 사용하세요.'
+      : '자동 실행은 끄고 수동 시작 명령을 알려주세요.',
+    '관리 인터페이스는 로컬 또는 이미 승인된 비공개 접근 경로로 유지하세요. 설정 후 CBGPU 모델 조회와 짧은 답변 요청을 검증하고, 실행 상태와 다시 시작하는 방법을 알려주세요.',
+  ].join('\n\n');
+}
+
 export function makeProfile(agent: Agent, model: Model, root: string, telegram: Telegram | null, permissions: Permissions = {}) {
   if (model.context < minimumContext[agent]) throw new Error('이 모델은 에이전트에 필요한 대화 길이를 지원하지 않아요.');
   const workspace = path.join(root, 'workspace');

@@ -9,7 +9,7 @@ import { getCACertificates } from 'node:tls';
 import path from 'node:path';
 import { endpoint } from './config.ts';
 import { client, page, stylesheet } from './setup-page.ts';
-import { makeProfile, modelsFromCatalog, parsePermissions, parseTelegram, validKey, validTelegramToken, type Agent } from './setup-profiles.ts';
+import { makeProfile, modelsFromCatalog, parsePermissions, parseTelegram, serverSetupPrompt, validKey, validTelegramToken, type Agent } from './setup-profiles.ts';
 import { findRuntime, installRuntime, prepareDesktop, openBrowser, runtimeEnvironment } from './setup-runtime.ts';
 import { configureAutostart, configureManualLauncher, saveSetupFile } from './setup-autostart.ts';
 import { readSetupLogo, setupLogos } from './setup-assets.ts';
@@ -338,6 +338,7 @@ export function startSetup({
         }
         case '/models': result = { models: await getModels(payload.key) }; break;
         case '/telegram/check': result = await verifyTelegramBot(payload.token, fetchBot); break;
+        case '/server-prompt': result = { prompt: serverSetupPrompt(parseAgent(payload.agent), payload) }; break;
         case '/install': result = await configure(payload); break;
         case '/install-runtime': {
           if (!portable || busy || running.has(parseAgent(payload.agent))) throw new Error('설치가 진행 중인지 확인해 주세요.');
