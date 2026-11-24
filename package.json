@@ -1,21 +1,26 @@
 {
   "name": "@cbgpu-engineering/agent-setup",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Portable OpenClaw and Hermes installer for CBGPU",
   "type": "module",
   "license": "Apache-2.0",
-  "engines": {"node": ">=22.18"},
-  "repository": {"type":"git","url":"https://github.com/CBGPU-Engineering/CBGPU-agent-setup.git"},
+  "engines": {
+    "node": ">=22.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CBGPU-Engineering/CBGPU-agent-setup.git"
+  },
   "scripts": {
-    "check":"tsc --noEmit",
-    "test":"npm run build && node --test test/*.test.ts",
-    "build":"tsc -p tsconfig.build.json",
-    "build:setup-executable":"npm run build && node scripts/build-setup-executable.ts"
+    "check": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "build:setup-executable": "npm run build && node scripts/build-setup-executable.ts"
   },
   "devDependencies": {
-    "@types/node":"22.20.5",
-    "esbuild":"0.28.2",
-    "typescript":"5.9.3"
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
   }
 }

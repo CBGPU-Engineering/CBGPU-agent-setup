@@ -2,12 +2,14 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstat, mkdir, readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { Agent as HttpsAgent, get as httpsGet } from 'node:https';
 import os from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
+import { getCACertificates } from 'node:tls';
 import path from 'node:path';
 import { endpoint } from './config.ts';
 import { client, page, stylesheet } from './setup-page.ts';
-import { makeProfile, modelsFromCatalog, parsePermissions, parseTelegram, validKey, type Agent } from './setup-profiles.ts';
+import { makeProfile, modelsFromCatalog, parsePermissions, parseTelegram, serverSetupPrompt, validKey, validTelegramToken, type Agent } from './setup-profiles.ts';
 import { findRuntime, installRuntime, prepareDesktop, openBrowser, runtimeEnvironment } from './setup-runtime.ts';
 import { configureAutostart, configureManualLauncher, saveSetupFile } from './setup-autostart.ts';
 import { readSetupLogo, setupLogos } from './setup-assets.ts';
@@ -48,10 +50,77 @@ async function modelCatalog(key: unknown) {
   return modelsFromCatalog((await response.json()).data);
 }
 
+type TelegramRequest = (url: string, options: { signal: AbortSignal; redirect: 'manual' }) => Promise<Response>;
+let telegramAgent: HttpsAgent | undefined;
+
+const telegramRequest: TelegramRequest = (url, { signal }) => new Promise((resolve, reject) => {
+  // Only Telegram uses this agent. Local setup requests keep their loopback connection.
+  if (!telegramAgent) {
+    const options = {
+      ca: [...new Set([...getCACertificates('default'), ...getCACertificates('system')])],
+      // Node supports this option even though the pinned Node 22 types omit it.
+      proxyEnv: process.env,
+    };
+    telegramAgent = new HttpsAgent(options);
+  }
+  const request = httpsGet(url, { agent: telegramAgent, signal, headers: { accept: 'application/json' } }, response => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    response.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 16_384) { response.destroy(new Error('Unexpected Telegram response size')); return; }
+      chunks.push(chunk);
+    });
+    response.once('error', reject);
+    response.once('end', () => {
+      const status = response.statusCode ?? 502;
+      resolve(new Response([204, 205, 304].includes(status) ? null : Buffer.concat(chunks).toString('utf8'), { status }));
+    });
+  });
+  request.once('error', reject);
+});
+
+async function verifyTelegramBot(token: unknown, request: TelegramRequest) {
+  if (!validTelegramToken(token)) throw new Error('BotFather에서 받은 봇 토큰을 콜론 앞뒤 전체 복사해 주세요.');
+  const url = 'https://api.telegram.org/bot' + token + '/getMe';
+  async function attempt(retry: boolean): Promise<{ username: string | null }> {
+    let response: Response;
+    try {
+      response = await request(url, { redirect: 'manual', signal: AbortSignal.timeout(8000) });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code && /CERT|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) throw new Error('이 컴퓨터에서 Telegram 인증서를 확인하지 못했어요. 네트워크의 인증서 설정을 확인해 주세요.');
+      if (retry) { await wait(400); return attempt(false); }
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') throw new Error('이 컴퓨터에서 Telegram 주소를 찾지 못했어요. 인터넷 연결과 DNS를 확인해 주세요.');
+      throw new Error('이 컴퓨터에서 Telegram에 연결하지 못했어요. 네트워크나 프록시 설정을 확인해 주세요.');
+    }
+    const result = await response.json().catch(() => null);
+    if (response.ok && result?.ok === true && result.result?.is_bot === true) {
+      const username = result.result.username;
+      return { username: typeof username === 'string' && /^[A-Za-z0-9_]{5,32}$/.test(username) ? username : null };
+    }
+    if ([401, 404].includes(response.status) && result?.ok === false && result.error_code === response.status) {
+      throw new Error('Telegram이 봇 토큰을 거부했어요 (' + response.status + '). BotFather에서 현재 토큰을 확인해 주세요.');
+    }
+    if (response.status === 429) {
+      const delay = result?.parameters?.retry_after;
+      const when = Number.isSafeInteger(delay) && delay > 0 && delay < 86400 ? delay + '초 뒤' : '잠시 뒤';
+      throw new Error('Telegram에 연결 확인 요청이 많아요. ' + when + ' 다시 확인해 주세요.');
+    }
+    if (response.status === 408 || response.status >= 500) {
+      if (retry) { await wait(400); return attempt(false); }
+      throw new Error('Telegram 서버가 연결 확인에 응답하지 못했어요 (HTTP ' + response.status + '). 잠시 뒤 다시 확인해 주세요.');
+    }
+    if (response.status === 403) throw new Error('현재 네트워크에서 Telegram에 접근할 수 없어요 (HTTP 403). 네트워크나 프록시 설정을 확인해 주세요.');
+    throw new Error('Telegram 연결 확인에 예상과 다른 응답이 왔어요 (HTTP ' + response.status + '). 네트워크 설정을 확인해 주세요.');
+  }
+  return attempt(true);
+}
+
 export function startSetup({
   root = systemRoot, browser = true, port = 0, portable = false, getModels = modelCatalog, enroll = configureAutostart,
   shortcut = configureManualLauncher,
-  install = installRuntime, runtime = findRuntime, fetchBot = fetch, prepareScreen = prepareDesktop,
+  install = installRuntime, runtime = findRuntime, fetchBot = telegramRequest, prepareScreen = prepareDesktop,
 } = {}) {
   const ticket = randomBytes(24).toString('base64url');
   let origin = '';
@@ -102,14 +171,7 @@ export function startSetup({
         if (current?.telegram?.token === telegram.token) {
           throw new Error('OpenClaw와 Hermes에 서로 다른 Telegram 봇을 연결해 주세요.');
         }
-        let result;
-        try {
-          const response = await fetchBot('https://api.telegram.org/bot' + telegram.token + '/getMe', {
-            redirect: 'error', signal: AbortSignal.timeout(8000),
-          });
-          result = response.ok && await response.json();
-        } catch { throw new Error('Telegram에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.'); }
-        if (!result?.ok || !result.result?.is_bot) throw new Error('BotFather에서 받은 Telegram 봇 토큰을 확인해 주세요.');
+        await verifyTelegramBot(telegram.token, fetchBot);
       }
       await mkdir(path.join(folder, 'workspace'), { recursive: true, mode: 0o700 });
       await install(agent, folder, permissions);
@@ -234,7 +296,7 @@ export function startSetup({
   };
   const server = createServer(async (request, response) => {
     response.setHeader('cache-control', 'no-store');
-    response.setHeader('referrer-policy', 'no-referrer');
+    response.setHeader('referrer-policy', 'same-origin');
     response.setHeader('x-content-type-options', 'nosniff');
     response.setHeader('content-security-policy', "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     const pathname = request.url ?? '/';
@@ -254,7 +316,9 @@ export function startSetup({
       return;
     }
     const token = request.headers['x-cbgpu-setup'];
-    if (request.method !== 'POST' || request.headers.origin !== origin || typeof token !== 'string' ||
+    const sameOrigin = request.headers.origin === origin ||
+      (request.headers.origin === undefined && request.headers['sec-fetch-site'] === 'same-origin');
+    if (request.method !== 'POST' || !sameOrigin || typeof token !== 'string' ||
         Buffer.byteLength(token) !== Buffer.byteLength(ticket) || !timingSafeEqual(Buffer.from(token), Buffer.from(ticket))) {
       return reply(response, 403, { error: '이 설치 창을 다시 열어 주세요.' });
     }
@@ -275,6 +339,8 @@ export function startSetup({
           break;
         }
         case '/models': result = { models: await getModels(payload.key) }; break;
+        case '/telegram/check': result = await verifyTelegramBot(payload.token, fetchBot); break;
+        case '/server-prompt': result = { prompt: serverSetupPrompt(parseAgent(payload.agent), payload) }; break;
         case '/install': result = await configure(payload); break;
         case '/install-runtime': {
           if (!portable || busy || running.has(parseAgent(payload.agent))) throw new Error('설치가 진행 중인지 확인해 주세요.');

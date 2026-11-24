@@ -54,8 +54,27 @@ test('loopback setup verifies origin and ticket, preserves runtime settings and 
       } });
     assert.equal((await request('/install', payload, 'https://external.example')).status, 403);
     assert.equal((await request('/install', payload, origin, 'wrong')).status, 403);
+    for (const [site, expected] of [['same-origin', 200], ['cross-site', 403]] as const) {
+      const response = await fetch(origin + '/status', {method:'POST',body:'{}',headers:{
+        'content-type':'application/json','sec-fetch-site':site,'x-cbgpu-setup':hash.slice(1),
+      }});
+      assert.equal(response.status, expected);
+    }
     assert.equal((await request('/install', { ...payload, accepted: false })).status, 400);
     assert.equal((await request('/install', { ...payload, model:'cbgpu-chat' })).status, 400);
+    const remoteOptions = { ...payload, context:65536, output:4096, vision:true, telegram:true, autoStart:true,
+      permissions:{read:true,shell:true,outside:false}, sudoPassword:'fixture-never-copy-this' };
+    for (const agent of ['openclaw', 'hermes']) {
+      const result = await request('/server-prompt', { ...remoteOptions, agent });
+      assert.equal(result.status, 200);
+      const { prompt } = await result.json();
+      assert.match(prompt, agent === 'openclaw' ? /cbgpu\/cbgpu-qwen38/ : /model\.default를 cbgpu-qwen38/);
+      assert.match(prompt, /65536.*4096/);
+      assert.match(prompt, /TELEGRAM_BOT_TOKEN.*111/);
+      assert.match(prompt, /허용할 권한은 read, shell/);
+      assert.match(prompt, /자동 실행을 설정/);
+      assert.doesNotMatch(prompt, /fixture-never-copy-this|abcdefghijklmnopqrstuvwxyz|cbgpu_ai_/);
+    }
     assert.equal(installed.length, 0);
     assert.equal((await request('/install', payload)).status, 200);
     assert.deepEqual(installed, ['openclaw']);
@@ -106,6 +125,45 @@ test('startup entries run under the desktop user and quote the application paths
   const windows = startupEntry('win32', 'C:/Users/user', {}, 'C:/Program Files/nodejs/node.exe', 'C:/Users/user/%profile%/setup-process.js');
   assert.match(windows.file, /Startup\\CBGPU Agent\.cmd$/);
   assert.match(windows.content, /start "" \/min "C:\/Program Files\/nodejs\/node\.exe" "C:\/Users\/user\/%%profile%%\/setup-process\.js" --autostart/);
+});
+
+test('Telegram verification reports the real cause and retries transient failures', async () => {
+  let calls = 0;
+  let response: (count: number) => Response = () => Response.json({ ok: true, result: { is_bot: true, username: 'cbgpu_test_bot' } });
+  const { url, server } = await startSetup({ browser: false, async fetchBot(input, options) {
+    assert.equal(input, 'https://api.telegram.org/bot' + token + '/getMe');
+    assert.equal(options.redirect, 'manual');
+    return response(++calls);
+  } });
+  try {
+    const { origin, hash } = new URL(url);
+    async function check(value = token) {
+      const result = await fetch(origin + '/telegram/check', { method: 'POST', body: JSON.stringify({ token: value }), headers: {
+        'content-type': 'application/json', origin, 'x-cbgpu-setup': hash.slice(1),
+      } });
+      const body = await result.json();
+      assert.doesNotMatch(JSON.stringify(body), new RegExp(token));
+      return { ok: result.ok, body };
+    }
+    assert.match((await check('bot'+token)).body.error, /콜론/);
+    assert.equal(calls, 0);
+    assert.deepEqual(await check(), { ok: true, body: { username: 'cbgpu_test_bot' } });
+
+    response = () => Response.json({ ok: false, error_code: 401 }, { status: 401 });
+    assert.match((await check()).body.error, /토큰을 거부.*401/);
+    response = () => new Response('<html>Blocked</html>', { status: 403 });
+    assert.match((await check()).body.error, /네트워크.*403/);
+    response = () => Response.json({ ok: false, error_code: 429, parameters: { retry_after: 3 } }, { status: 429 });
+    assert.match((await check()).body.error, /3초 뒤/);
+
+    calls = 0;
+    response = count => count === 1 ? new Response('Unavailable', { status: 503 })
+      : Response.json({ ok: true, result: { is_bot: true } });
+    assert.deepEqual(await check(), { ok: true, body: { username: null } });
+    assert.equal(calls, 2);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test('only a configured Telegram profile may resume at login and does so once', async () => {

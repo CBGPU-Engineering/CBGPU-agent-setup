@@ -19,8 +19,9 @@ export const page = '<!doctype html>' + String.raw`
 <section><h2>Telegram 연결 <span class="optional">선택</span></h2>
 <p>Telegram에서 내 에이전트에 작업을 맡기려면 봇을 연결하세요.</p>
 <ol><li><a href="https://t.me/BotFather" target="_blank" rel="noreferrer">BotFather</a>에서 <code>/newbot</code>으로 봇을 만들어요.</li><li><a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">UserInfoBot</a>에서 내 숫자 사용자 ID를 확인해요.</li></ol>
-<div class="fields"><div><label for="telegram">봇 토큰</label><input id="telegram" type="password" autocomplete="off" spellcheck="false"></div>
+<div class="fields"><div><label for="telegram">봇 토큰</label><input id="telegram" type="password" autocomplete="off" placeholder="숫자:문자열" spellcheck="false" aria-describedby="telegram-result"></div>
 <div><label for="user">내 사용자 ID</label><input id="user" inputmode="numeric" pattern="[1-9][0-9]{0,15}"></div></div>
+<div class="inline"><button id="verify-telegram" type="button">봇 연결 확인</button><p class="help" id="telegram-result" role="status"></p></div>
 <label class="agree"><input id="autostart" type="checkbox"> <span>컴퓨터에 로그인하면 자동 시작</span></label>
 <p class="help">이 컴퓨터에 로그인하면 에이전트가 켜져요. 컴퓨터가 켜져 있고 인터넷에 연결되어 있어야 Telegram으로 작업을 맡길 수 있어요.</p>
 <button id="save-autostart" type="button" hidden>자동 시작 설정 저장</button>
@@ -52,6 +53,8 @@ export const page = '<!doctype html>' + String.raw`
 <p>모델이 작업에 사용하는 대화와 파일 내용은 CBGPU에 전달될 수 있어요. Telegram을 연결하면 그곳에서 보낸 메시지도 에이전트에 전달돼요.</p>
 <label class="agree"><input id="risk" type="checkbox" required> <span>접근 권한과 위험을 확인했어요.</span></label></section>
 <footer><button class="primary" id="apply" type="submit" disabled>설치하고 연결하기</button>
+<button id="copy-server-prompt" type="button" disabled>서버 설치 프롬프트 복사</button>
+<div id="server-prompt-panel" hidden><label for="server-prompt">서버에서 실행 중인 에이전트에게 전달할 프롬프트</label><textarea id="server-prompt" rows="9" readonly></textarea></div>
 <button id="install-app" type="button" hidden>프로그램만 설치하기</button>
 <div id="sudo-auth" hidden><label for="sudo-password">이 세션의 sudo 비밀번호</label><input id="sudo-password" type="password" autocomplete="off" spellcheck="false"><p class="help">이 컴퓨터의 Hermes 프로세스에만 전달해요. 파일로 저장하지 않아요. 원격 작업에서도 관리자 권한이 쓰일 수 있어요.</p></div>
 <button id="start" type="button" hidden>에이전트 시작하기</button><button id="stop" type="button" hidden>에이전트 멈추기</button>
@@ -73,7 +76,7 @@ section{padding:24px 0;border-bottom:1px solid var(--border)}
 input[type=checkbox],input[type=radio]{accent-color:var(--blue);width:18px;height:18px;margin:0;flex:none}
 .agent-mark{flex:none;object-fit:contain}
 small{display:block;color:var(--soft);font-size:.87rem;margin-top:4px}.optional,.help{font-weight:400;font-size:.9rem;color:var(--soft)}
-label:not(.agree){font-weight:650}input:not([type=radio],[type=checkbox]),select{display:block;width:100%;min-height:46px;margin:6px 0 12px;padding:8px 11px;border:1px solid var(--border);border-radius:9px;background:var(--paper);color:var(--ink);font:inherit}
+label:not(.agree){font-weight:650}input:not([type=radio],[type=checkbox]),select,textarea{display:block;width:100%;min-height:46px;margin:6px 0 12px;padding:8px 11px;border:1px solid var(--border);border-radius:9px;background:var(--paper);color:var(--ink);font:inherit}#server-prompt-panel{width:100%}textarea{resize:vertical}
 a{color:var(--blue);font-weight:650;text-underline-offset:3px}.inline,footer{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.inline{justify-content:space-between;margin:0 0 14px}
 button{background:var(--paper);color:var(--blue);border:1px solid var(--border);border-radius:9px;min-height:44px;padding:8px 13px;font:inherit;font-weight:700;cursor:pointer}[hidden]{display:none!important}button:active{transform:translateY(1px)}button:disabled{cursor:not-allowed;opacity:.62}.primary{background:var(--blue);color:var(--white);border-color:var(--blue)}
 ol{padding-left:20px;color:var(--soft)}.risk{padding:17px;margin:23px 0 8px;background:var(--warn);border:0;border-inline-start:3px solid var(--warn-ink);border-radius:6px}.risk p,.risk h2{color:var(--warn-ink)}.agree{display:flex;gap:10px;align-items:center;min-height:44px;font-weight:700;cursor:pointer}
@@ -89,10 +92,16 @@ history.replaceState(null, '', location.pathname);
 const get = id => document.getElementById(id);
 const form = get('setup'), select = get('model'), key = get('key');
 const status = get('status'), verify = get('verify'), apply = get('apply');
+const telegram = get('telegram'), verifyTelegram = get('verify-telegram'), telegramResult = get('telegram-result');
+const copyPrompt = get('copy-server-prompt'), promptPanel = get('server-prompt-panel'), promptText = get('server-prompt');
 const capabilityNames = ['read','write','shell','browser','screen','schedule','send','outside','accounts','skills'];
 let needsSudo = false, platform = '', catalog = [], busy = false, running = false, saved = '', portable = false;
+let promptRevision = 0;
 const selected = () => new FormData(form).get('agent');
 const minimum = {openclaw:16000,hermes:64000};
+function readPermissions() {
+  return {...Object.fromEntries([...capabilityNames,'vault','sudo'].map(name => [name, get('p-' + name).checked])), awake:get('awake').checked};
+}
 function message(text, error = false) { status.textContent = text; status.dataset.error = String(error); }
 async function request(path, content = {}) {
   const response = await fetch(path, {
@@ -120,6 +129,7 @@ function renderModels() {
   if (candidates.some(model => model.id === previous)) select.value = previous;
   select.disabled = !candidates.length || busy;
   apply.disabled = !candidates.length || busy || running;
+  copyPrompt.disabled = !candidates.length || busy;
   get('install-app').disabled = busy || running;
   if (permission.checked && selected() === 'openclaw' && catalog.some(model => model.context >= minimum.openclaw) && !candidates.length) {
     get('compatibility').textContent = 'OpenClaw의 화면 조작에는 이미지 입력을 지원하는 모델이 필요해요.';
@@ -139,9 +149,23 @@ form.querySelectorAll('[name=agent]').forEach(radio => radio.addEventListener('c
 get('p-screen').addEventListener('change', renderModels);
 get('assistant').addEventListener('click', () => {
   capabilityNames.forEach(name => { get('p-' + name).checked = true; });
+  promptRevision++;
+  promptPanel.hidden = true;
   renderModels();
 });
 key.addEventListener('input', () => { catalog = []; renderModels(); });
+telegram.addEventListener('input', () => { telegramResult.textContent = ''; });
+verifyTelegram.addEventListener('click', async () => {
+  const token = telegram.value.trim();
+  verifyTelegram.disabled = true;
+  telegramResult.textContent = 'Telegram에서 봇을 확인하고 있어요.';
+  try {
+    const { username } = await request('/telegram/check', { token });
+    if (token === telegram.value.trim()) telegramResult.textContent = username ? '@' + username + ' 봇을 확인했어요.' : 'Telegram 봇을 확인했어요.';
+  } catch (error) {
+    if (token === telegram.value.trim()) telegramResult.textContent = error.message;
+  } finally { verifyTelegram.disabled = false; }
+});
 verify.addEventListener('click', async () => {
   if (!key.reportValidity()) return;
   verify.disabled = true;
@@ -150,20 +174,46 @@ verify.addEventListener('click', async () => {
   catch (error) { catalog = []; message(error.message, true); }
   finally { verify.disabled = false; renderModels(); }
 });
+form.addEventListener('input', event => {
+  if (event.target !== promptText) { promptRevision++; promptPanel.hidden = true; }
+});
+copyPrompt.addEventListener('click', async () => {
+  const model = catalog.find(option => option.id === select.value);
+  if (!model) return;
+  copyPrompt.disabled = true;
+  promptPanel.hidden = true;
+  const revision = promptRevision;
+  const user = get('user').value.trim();
+  try {
+    const result = await request('/server-prompt', {agent:selected(), model:model.id, context:model.context,
+      output:model.output, vision:model.vision, telegram:Boolean(telegram.value.trim() || user),
+      user, autoStart:get('autostart').checked, permissions:readPermissions()});
+    if (revision !== promptRevision) return;
+    promptText.value = result.prompt;
+    promptPanel.hidden = false;
+    try {
+      await navigator.clipboard.writeText(result.prompt);
+      message('서버 설치 프롬프트를 복사했어요.');
+    } catch {
+      promptText.focus(); promptText.select();
+      message('선택된 프롬프트를 복사해 주세요.');
+    }
+  } catch (error) { message(error.message, true); }
+  finally { renderModels(); }
+});
 form.addEventListener('submit', async event => {
   event.preventDefault();
   if (busy || !form.reportValidity() || !select.value) return;
   const data = { agent:selected(), model:select.value, key:key.value, token:get('telegram').value.trim(), autoStart: get('autostart').checked,
     user:get('user').value.trim(), accepted:get('risk').checked,
-    permissions:Object.fromEntries([...capabilityNames,'vault','sudo'].map(name => [name, get('p-' + name).checked])) };
-  data.permissions.awake = get('awake').checked;
+    permissions:readPermissions() };
   busy = true; renderModels();
   message('공식 설치 파일을 내려받고 CBGPU에 연결하고 있어요. 몇 분 걸릴 수 있어요.');
   try {
     const result = await request('/install', data);
     saved = data.agent; needsSudo = data.permissions.sudo;
     get('save-autostart').hidden = !data.token;
-    key.value = ''; get('telegram').value = ''; catalog = [];
+    key.value = ''; telegram.value = ''; telegramResult.textContent = ''; catalog = [];
     get('start').hidden = portable;
     if (portable) {
       get('manual-guide').textContent = platform === 'darwin'
