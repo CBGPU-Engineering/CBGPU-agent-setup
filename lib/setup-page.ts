@@ -4,6 +4,9 @@ export const page = '<!doctype html>' + String.raw`
 <body><main>
 <header><strong class="wordmark">CBGPU</strong><h1>내 컴퓨터에<br>에이전트 설치하기</h1>
 <p>에이전트는 내 컴퓨터에서 작업하고, 모델은 CBGPU GPU에서 실행돼요.</p></header>
+<section id="existing-hermes" hidden><h2>이미 Hermes를 사용 중인가요?</h2>
+<p>설정과 대화는 그대로 두고 기존 실행 바로가기를 업데이트해요.</p>
+<button id="update-hermes-launcher" type="button">Hermes 바로가기 업데이트</button></section>
 <form id="setup">
 <section><h2>어떤 에이전트를 설치할까요?</h2>
 <div class="choices">
@@ -59,7 +62,7 @@ export const page = '<!doctype html>' + String.raw`
 <div id="sudo-auth" hidden><label for="sudo-password">이 세션의 sudo 비밀번호</label><input id="sudo-password" type="password" autocomplete="off" spellcheck="false"><p class="help">이 컴퓨터의 Hermes 프로세스에만 전달해요. 파일로 저장하지 않아요. 원격 작업에서도 관리자 권한이 쓰일 수 있어요.</p></div>
 <button id="start" type="button" hidden>에이전트 시작하기</button><button id="stop" type="button" hidden>에이전트 멈추기</button>
 <p id="status" role="status" aria-live="polite"></p>
-<section id="installed" hidden><h2>설치 완료</h2><p id="manual-guide"></p>
+<section id="installed" hidden><h2 id="completion-title">설치 완료</h2><p id="manual-guide"></p>
 <button id="finish" type="button">설치 도우미 닫기</button></section></footer>
 </form></main><script src="/setup.js" defer></script></body></html>`;
 
@@ -92,6 +95,7 @@ history.replaceState(null, '', location.pathname);
 const get = id => document.getElementById(id);
 const form = get('setup'), select = get('model'), key = get('key');
 const status = get('status'), verify = get('verify'), apply = get('apply');
+const updateLauncher = get('update-hermes-launcher');
 const telegram = get('telegram'), verifyTelegram = get('verify-telegram'), telegramResult = get('telegram-result');
 const copyPrompt = get('copy-server-prompt'), promptPanel = get('server-prompt-panel'), promptText = get('server-prompt');
 const capabilityNames = ['read','write','shell','browser','screen','schedule','send','outside','accounts','skills'];
@@ -130,6 +134,7 @@ function renderModels() {
   select.disabled = !candidates.length || busy;
   apply.disabled = !candidates.length || busy || running;
   copyPrompt.disabled = !candidates.length || busy;
+  updateLauncher.disabled = busy;
   get('install-app').disabled = busy || running;
   if (permission.checked && selected() === 'openclaw' && catalog.some(model => model.context >= minimum.openclaw) && !candidates.length) {
     get('compatibility').textContent = 'OpenClaw의 화면 조작에는 이미지 입력을 지원하는 모델이 필요해요.';
@@ -216,6 +221,7 @@ form.addEventListener('submit', async event => {
     key.value = ''; telegram.value = ''; telegramResult.textContent = ''; catalog = [];
     get('start').hidden = portable;
     if (portable) {
+      get('completion-title').textContent = '설치 완료';
       get('manual-guide').textContent = platform === 'darwin'
         ? 'Finder의 홈 폴더 → 응용 프로그램에서 ' + result.launcher.name + '.command를 여세요. 설치 도우미 파일은 닫은 뒤 삭제해도 돼요.'
         : (platform === 'win32' ? 'Windows 시작 메뉴' : '앱 메뉴') + '에서 ' + result.launcher.name + '를 검색해 실행하세요. 설치 도우미 파일은 닫은 뒤 삭제해도 돼요.';
@@ -225,6 +231,25 @@ form.addEventListener('submit', async event => {
   } catch (error) { message(error.message, true); }
   finally { busy = false; renderModels(); }
 });
+updateLauncher.addEventListener('click', async () => {
+  if (busy) return;
+  busy = true;
+  renderModels();
+  updateLauncher.textContent = '업데이트 중…';
+  try {
+    await request('/update-hermes-launcher');
+    get('completion-title').textContent = 'Hermes 바로가기 업데이트 완료';
+    get('manual-guide').textContent = '설치 도우미를 닫고 기존 Hermes 실행을 종료한 뒤 Hermes (CBGPU)를 다시 여세요. 이전 시작기가 계속 실행 중이면 컴퓨터에 다시 로그인해 주세요.';
+    get('installed').hidden = false;
+    get('finish').focus();
+    message('설정과 대화를 보존하고 바로가기를 업데이트했어요.');
+  } catch (error) { message(error.message, true); }
+  finally {
+    busy = false;
+    updateLauncher.textContent = 'Hermes 바로가기 업데이트';
+    renderModels();
+  }
+});
 get('install-app').addEventListener('click', async () => {
   if (busy || !get('risk').reportValidity()) return;
   const agent = selected();
@@ -233,6 +258,7 @@ get('install-app').addEventListener('click', async () => {
   message('공식 프로그램을 내려받아 설치하고 있어요.');
   try {
     await request('/install-runtime', {agent,accepted:true,permissions:{browser:get('p-browser').checked}});
+    get('completion-title').textContent = '설치 완료';
     get('manual-guide').textContent = agent === 'hermes'
       ? '터미널에서 hermes를 실행하면 Hermes 설정을 열 수 있어요. CBGPU 연결과 자동 시작은 호환 모델을 연결한 뒤 설정할 수 있어요.'
       : 'OpenClaw 프로그램을 이 컴퓨터에 저장했어요. CBGPU에 연결하면 앱 메뉴에 수동 실행 바로가기를 만들어요.';
@@ -279,6 +305,7 @@ get('save-autostart').addEventListener('click', async event => {
 function restoreProfile(result, initial) {
   saved = result.saved; needsSudo = Boolean(result.permissions.sudo); platform = result.platform;
   portable = result.portable;
+  get('existing-hermes').hidden = !portable || !result.hermesConfigured;
   get('install-app').hidden = !portable;
   if (saved) {
     if (initial) for (const radio of form.querySelectorAll('[name=agent]')) radio.checked = radio.value === saved;

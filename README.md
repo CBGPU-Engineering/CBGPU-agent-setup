@@ -24,6 +24,10 @@ Windows still uses the system lid action. macOS uses its closed-display
 requirements. The CBGPU API must list a compatible model for AI and Telegram
 tasks. The installer can also install just the upstream program.
 
+To update an existing Hermes (CBGPU) shortcut, open the new setup executable
+and select **Hermes 바로가기 업데이트**. The updater preserves the Hermes
+configuration, conversations and credentials.
+
 The `cbgpu` terminal coding tool lives in
 [CBGPU-agent](https://github.com/CBGPU-Engineering/CBGPU-agent).
 
@@ -43,4 +47,5 @@ and macOS Intel and Apple Silicon.
 ## License
 
 Apache 2.0. The original Node.js, OpenClaw and Hermes notices are included
-under `assets/setup/` and in the release files.
+under `assets/setup/`. The release files also include the ISC notice for the
+bundled YAML parser.
