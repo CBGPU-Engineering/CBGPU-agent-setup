@@ -62,6 +62,13 @@ services:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "8804094180"
+      # The group/channel gate only checks non-DMs, whose IDs are negative.
+      TELEGRAM_ALLOWED_CHATS: "8804094180"
+      TELEGRAM_GUEST_MODE: "false"
+      TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: "false"
+      TELEGRAM_ALLOW_ALL_USERS: "false"
       HERMES_GEMINI_BASE_URL: "${HERMES_GEMINI_BASE_URL:-}"
     volumes:
       - hermes-data:/opt/data
