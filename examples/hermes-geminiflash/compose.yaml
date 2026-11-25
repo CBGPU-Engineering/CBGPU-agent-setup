@@ -1,0 +1,131 @@
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v0.23.4@sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f
+    restart: unless-stopped
+    working_dir: /opt/data
+    command:
+      - sh
+      - -ec
+      - |
+        /opt/hermes/.venv/bin/python - <<'PY'
+        import os
+        from pathlib import Path
+        import secrets
+        import sys
+        from tempfile import NamedTemporaryFile
+        from dotenv import dotenv_values, set_key
+
+        sys.path.insert(0, '/opt/hermes')
+        from hermes_yaml import roundtrip_yaml
+
+        os.umask(0o077)
+        data = Path('/opt/data')
+        workspace = data / 'workspace'
+        workspace.mkdir(mode=0o700, exist_ok=True)
+        env_file = data / '.env'
+        env_file.touch(mode=0o600, exist_ok=True)
+        env_file.chmod(0o600)
+        if not dotenv_values(env_file, interpolate=False).get('API_SERVER_KEY'):
+            set_key(str(env_file), 'API_SERVER_KEY', secrets.token_urlsafe(36))
+
+        enabled = bool(os.environ.get('HERMES_GEMINI_BASE_URL', '').strip())
+        path = data / 'config.yaml'
+        yaml = roundtrip_yaml()
+        config = (yaml.load(path) or {}) if path.is_file() else {}
+        terminal = config.setdefault('terminal', {})
+        terminal.setdefault('backend', 'local')
+        terminal.setdefault('cwd', str(workspace))
+        if enabled:
+            if not isinstance(config.get('model'), dict):
+                config['model'] = {}
+            model = config['model']
+            model.update(provider='custom', default='gemini-compatible',
+                         base_url='http://gemini-bridge:4000/v1',
+                         api_mode='chat_completions', streaming=True)
+            for key in ('api_key', 'api_key_env', 'key_cmd'):
+                model.pop(key, None)
+            model.pop('key_env', None)
+
+
+        with NamedTemporaryFile(mode='w', encoding='utf-8', dir=data, delete=False) as output:
+            yaml.dump(config, output)
+            output.flush()
+            Path(output.name).replace(path)
+        PY
+        exec hermes gateway run --replace
+    environment:
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+      HERMES_HOME_MODE: "0700"
+      HERMES_DASHBOARD: "0"
+      HERMES_REDACT_SECRETS: "true"
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      HERMES_GEMINI_BASE_URL: "${HERMES_GEMINI_BASE_URL:-}"
+    volumes:
+      - hermes-data:/opt/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8642/health', timeout=3).close()"]
+      interval: 12s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  gemini-bridge:
+    image: ghcr.io/berriai/litellm:v1.111.0@sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46
+    restart: unless-stopped
+    user: "65532:65532"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        python - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+        import re
+        import sys
+        from urllib.parse import urlsplit
+
+        base = os.environ.get('HERMES_GEMINI_BASE_URL', '').strip().rstrip('/')
+        model = os.environ.get('HERMES_GEMINI_MODEL_ID', '').strip().removeprefix('models/')
+        key = os.environ.get('HERMES_GEMINI_API_KEY', '')
+        config = {'model_list': [], 'litellm_settings': {'drop_params': True}}
+        if any((base, model, key)):
+            if not all((base, model, key)):
+                sys.exit('Set HERMES_GEMINI_BASE_URL, HERMES_GEMINI_MODEL_ID, and HERMES_GEMINI_API_KEY together')
+            try:
+                parsed = urlsplit(base)
+                if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError
+            except ValueError:
+                sys.exit('Use an HTTPS Gemini API base URL without credentials or query parameters')
+            if '/models/' in parsed.path or not re.fullmatch(r'[A-Za-z0-9._-]+', model):
+                sys.exit('Use an API base URL ending before /models and a separate Gemini model ID')
+            if not parsed.path:
+                base += '/v1beta'
+            config['model_list'].append({
+                'model_name': 'gemini-compatible',
+                'litellm_params': {
+                    'model': 'gemini/' + model,
+                    'api_base': base,
+                    'api_key': 'os.environ/HERMES_GEMINI_API_KEY',
+                },
+            })
+        Path('/tmp/hermes-gemini-proxy.json').write_text(json.dumps(config), encoding='utf-8')
+        PY
+        exec litellm --config /tmp/hermes-gemini-proxy.json --host 0.0.0.0 --port 4000
+    environment:
+      HERMES_GEMINI_BASE_URL: "${HERMES_GEMINI_BASE_URL:-}"
+      HERMES_GEMINI_MODEL_ID: "${HERMES_GEMINI_MODEL_ID:-}"
+      HERMES_GEMINI_API_KEY: "${HERMES_GEMINI_API_KEY:-}"
+      LITELLM_LOG: "WARNING"
+      LITELLM_TELEMETRY: "False"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3).close()"]
+      interval: 12s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+volumes:
+  hermes-data:
