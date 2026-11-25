@@ -1,0 +1,89 @@
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v0.23.4@sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f
+    restart: unless-stopped
+    working_dir: /opt/data
+    command:
+      - sh
+      - -ec
+      - |
+        /opt/hermes/.venv/bin/python - <<'PY'
+        import os
+        from pathlib import Path
+        import secrets
+        import sys
+        from tempfile import NamedTemporaryFile
+        from urllib.parse import urlsplit
+        from dotenv import dotenv_values, set_key
+
+        sys.path.insert(0, '/opt/hermes')
+        from hermes_yaml import roundtrip_yaml
+
+        os.umask(0o077)
+        data = Path('/opt/data')
+        workspace = data / 'workspace'
+        workspace.mkdir(mode=0o700, exist_ok=True)
+        env_file = data / '.env'
+        env_file.touch(mode=0o600, exist_ok=True)
+        env_file.chmod(0o600)
+        if not dotenv_values(env_file, interpolate=False).get('API_SERVER_KEY'):
+            set_key(str(env_file), 'API_SERVER_KEY', secrets.token_urlsafe(36))
+
+        base = os.environ.get('HERMES_MODEL_BASE_URL', '').strip().rstrip('/')
+        model_id = os.environ.get('HERMES_MODEL_ID', '').strip()
+        if bool(base) != bool(model_id):
+            sys.exit('Set both HERMES_MODEL_BASE_URL and HERMES_MODEL_ID')
+        if base:
+            parsed = urlsplit(base)
+            if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                sys.exit('Use an HTTPS API base URL and put credentials in HERMES_MODEL_API_KEY')
+            if base.endswith('/chat/completions'):
+                base = base.removesuffix('/chat/completions')
+
+        path = data / 'config.yaml'
+        yaml = roundtrip_yaml()
+        config = (yaml.load(path) or {}) if path.is_file() else {}
+        terminal = config.setdefault('terminal', {})
+        terminal.setdefault('backend', 'local')
+        terminal.setdefault('cwd', str(workspace))
+        if base:
+            if not isinstance(config.get('model'), dict):
+                config['model'] = {}
+            model = config['model']
+            model.update(provider='custom', default=model_id, base_url=base,
+                         api_mode='chat_completions', streaming=True)
+            for key in ('api_key', 'api_key_env', 'key_cmd'):
+                model.pop(key, None)
+            if os.environ.get('HERMES_MODEL_API_KEY'):
+                model['key_env'] = 'HERMES_MODEL_API_KEY'
+            else:
+                model.pop('key_env', None)
+
+        with NamedTemporaryFile(mode='w', encoding='utf-8', dir=data, delete=False) as output:
+            yaml.dump(config, output)
+            output.flush()
+            Path(output.name).replace(path)
+        PY
+        exec hermes gateway run --replace
+    environment:
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+      HERMES_HOME_MODE: "0700"
+      HERMES_DASHBOARD: "0"
+      HERMES_REDACT_SECRETS: "true"
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      HERMES_MODEL_BASE_URL: "${HERMES_MODEL_BASE_URL:-}"
+      HERMES_MODEL_ID: "${HERMES_MODEL_ID:-}"
+      HERMES_MODEL_API_KEY: "${HERMES_MODEL_API_KEY:-}"
+    volumes:
+      - hermes-data:/opt/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8642/health', timeout=3).close()"]
+      interval: 12s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+volumes:
+  hermes-data:
