@@ -59,6 +59,16 @@ services:
             else:
                 model.pop('key_env', None)
 
+        if os.environ.get('CBGPU_API_KEY', '').strip():
+            # Send image pixels only to the dedicated vision endpoint.
+            config.setdefault('agent', {})['image_input_mode'] = 'text'
+            vision = config.setdefault('auxiliary', {}).setdefault('vision', {})
+            vision.update(provider='custom', model='cbgpu-qwen38',
+                          base_url='https://cbgpu.com/api/ai/v1', key_env='CBGPU_API_KEY',
+                          api_mode='chat_completions')
+            for key in ('api_key', 'api_key_env', 'key_cmd'):
+                vision.pop(key, None)
+
         with NamedTemporaryFile(mode='w', encoding='utf-8', dir=data, delete=False) as output:
             yaml.dump(config, output)
             output.flush()
@@ -84,6 +94,7 @@ services:
       HERMES_MODEL_BASE_URL: "${HERMES_MODEL_BASE_URL:-}"
       HERMES_MODEL_ID: "${HERMES_MODEL_ID:-}"
       HERMES_MODEL_API_KEY: "${HERMES_MODEL_API_KEY:-}"
+      CBGPU_API_KEY: "${CBGPU_API_KEY:-}"
     volumes:
       - hermes-data:/opt/data
     healthcheck:
