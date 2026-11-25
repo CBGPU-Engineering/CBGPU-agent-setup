@@ -44,7 +44,7 @@ services:
                          api_mode='chat_completions', streaming=True)
             for key in ('api_key', 'api_key_env', 'key_cmd'):
                 model.pop(key, None)
-            model.pop('key_env', None)
+            model['key_env'] = 'HERMES_GEMINI_BRIDGE_KEY'
 
 
         with NamedTemporaryFile(mode='w', encoding='utf-8', dir=data, delete=False) as output:
@@ -69,6 +69,7 @@ services:
       TELEGRAM_GUEST_MODE: "false"
       TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: "false"
       TELEGRAM_ALLOW_ALL_USERS: "false"
+      HERMES_GEMINI_BRIDGE_KEY: "${HERMES_GEMINI_BRIDGE_KEY:-}"
       HERMES_GEMINI_BASE_URL: "${HERMES_GEMINI_BASE_URL:-}"
     volumes:
       - hermes-data:/opt/data
@@ -123,6 +124,7 @@ services:
         PY
         exec litellm --config /tmp/hermes-gemini-proxy.json --host 0.0.0.0 --port 4000
     environment:
+      LITELLM_MASTER_KEY: "${HERMES_GEMINI_BRIDGE_KEY:?Set a private Gemini bridge key}"
       HERMES_GEMINI_BASE_URL: "${HERMES_GEMINI_BASE_URL:-}"
       HERMES_GEMINI_MODEL_ID: "${HERMES_GEMINI_MODEL_ID:-}"
       HERMES_GEMINI_API_KEY: "${HERMES_GEMINI_API_KEY:-}"
