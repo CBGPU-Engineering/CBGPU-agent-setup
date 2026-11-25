@@ -62,9 +62,14 @@ services:
         if os.environ.get('CBGPU_API_KEY', '').strip():
             # Send image pixels only to the dedicated vision endpoint.
             config.setdefault('agent', {})['image_input_mode'] = 'text'
-            vision = config.setdefault('auxiliary', {}).setdefault('vision', {})
+            auxiliary = config.setdefault('auxiliary', {})
+            endpoint = 'https://cbgpu.com/api/ai/v1'
+            stream_urls = auxiliary.setdefault('stream_only_base_urls', [])
+            if endpoint not in stream_urls:
+                stream_urls.append(endpoint)
+            vision = auxiliary.setdefault('vision', {})
             vision.update(provider='custom', model='cbgpu-qwen38',
-                          base_url='https://cbgpu.com/api/ai/v1', key_env='CBGPU_API_KEY',
+                          base_url=endpoint, key_env='CBGPU_API_KEY',
                           api_mode='chat_completions')
             for key in ('api_key', 'api_key_env', 'key_cmd'):
                 vision.pop(key, None)
