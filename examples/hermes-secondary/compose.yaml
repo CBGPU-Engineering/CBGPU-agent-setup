@@ -79,7 +79,30 @@ services:
             output.flush()
             Path(output.name).replace(path)
         PY
-        exec hermes gateway run --replace
+        if [ -z "$$CBGPU_API_KEY" ]; then
+          exec hermes gateway run --replace
+        fi
+        exec /opt/hermes/.venv/bin/python - gateway run --replace <<'PY'
+        import sys
+        sys.path.insert(0, '/opt/hermes')
+
+        from hermes_cli.main import main
+        from tools import vision_tools
+
+        # Allow room below CBGPU's 1.5 MB limit even after base64 encoding.
+        image_budget = 1_350_000
+        vision_tools._MAX_BASE64_BYTES = image_budget
+        vision_tools._RESIZE_TARGET_BYTES = image_budget
+        resize_prepared = vision_tools._resize_prepared
+
+        async def resize_for_cbgpu(prepared, scale_info, **kwargs):
+            kwargs.setdefault('max_base64_bytes', image_budget)
+            kwargs.setdefault('force_jpeg', True)
+            return await resize_prepared(prepared, scale_info, **kwargs)
+
+        vision_tools._resize_prepared = resize_for_cbgpu
+        main()
+        PY
     environment:
       HERMES_UID: "10000"
       HERMES_GID: "10000"
