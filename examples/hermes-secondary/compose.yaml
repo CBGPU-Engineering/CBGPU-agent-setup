@@ -2,7 +2,6 @@ services:
   hermes:
     image: nousresearch/hermes-agent:v0.23.4@sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f
     restart: unless-stopped
-    pids_limit: 512
     working_dir: /opt/data
     command:
       - sh
@@ -44,6 +43,9 @@ services:
         path = data / 'config.yaml'
         yaml = roundtrip_yaml()
         config = (yaml.load(path) or {}) if path.is_file() else {}
+        # CBGPU applies a 256-task limit to this container.
+        config['max_concurrent_sessions'] = 2
+        config.setdefault('delegation', {})['max_concurrent_children'] = 2
         terminal = config.setdefault('terminal', {})
         terminal.setdefault('backend', 'local')
         terminal.setdefault('cwd', str(workspace))
